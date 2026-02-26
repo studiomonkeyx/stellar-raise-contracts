@@ -174,6 +174,19 @@ impl CrowdfundContract {
                 .set(&DataKey::BonusGoalDescription, &bg_description);
         }
 
+        if let Some(bg) = bonus_goal {
+            if bg <= goal {
+                panic!("bonus goal must be greater than primary goal");
+            }
+            env.storage().instance().set(&DataKey::BonusGoal, &bg);
+        }
+
+        if let Some(bg_description) = bonus_goal_description {
+            env.storage()
+                .instance()
+                .set(&DataKey::BonusGoalDescription, &bg_description);
+        }
+
         env.storage().instance().set(&DataKey::Creator, &creator);
         env.storage().instance().set(&DataKey::Token, &token);
         env.storage().instance().set(&DataKey::Goal, &goal);
@@ -334,6 +347,20 @@ impl CrowdfundContract {
             .extend_ttl(&last_time_key, 100, 100);
 
         Ok(())
+    }
+
+    /// Sets the NFT contract address used for reward minting.
+    ///
+    /// Only the campaign creator can configure this value.
+    pub fn set_nft_contract(env: Env, creator: Address, nft_contract: Address) {
+        let stored_creator: Address = env.storage().instance().get(&DataKey::Creator).unwrap();
+        if creator != stored_creator {
+            panic!("not authorized");
+        }
+        creator.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::NFTContract, &nft_contract);
     }
 
     /// Pledge tokens to the campaign without transferring them immediately.
@@ -576,8 +603,24 @@ impl CrowdfundContract {
         let amount: i128 = env
             .storage()
             .persistent()
-            .get(&contribution_key)
-            .unwrap_or(0);
+            .get(&DataKey::Contributors)
+            .unwrap();
+
+        for contributor in contributors.iter() {
+            let contribution_key = DataKey::Contribution(contributor.clone());
+            let amount: i128 = env
+                .storage()
+                .persistent()
+                .get(&contribution_key)
+                .unwrap_or(0);
+            if amount > 0 {
+                token_client.transfer(&env.current_contract_address(), &contributor, &amount);
+                env.storage().persistent().set(&contribution_key, &0i128);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&contribution_key, 100, 100);
+            }
+        }
 
         if amount == 0 {
             return Ok(());
@@ -585,12 +628,12 @@ impl CrowdfundContract {
 
         let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let token_client = token::Client::new(&env, &token_address);
-        token_client.transfer(&env.current_contract_address(), &contributor, &amount);
 
         env.storage().persistent().set(&contribution_key, &0i128);
         env.storage()
             .persistent()
-            .extend_ttl(&contribution_key, 100, 100);
+            .get(&DataKey::Contributors)
+            .unwrap();
 
         env.storage()
             .instance()
