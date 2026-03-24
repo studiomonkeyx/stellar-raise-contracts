@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -57,36 +57,39 @@ jobs:
       - name: Initialize campaign
         run: |
           DEADLINE=$(( $(date +%s) + 86400 ))
+          CI_ADDR=$(soroban keys address ci-deployer)
           soroban contract invoke \
             --id $CONTRACT_ID \
             --network $NETWORK \
             --source ci-deployer \
             -- initialize \
-            --creator $(soroban keys address ci-deployer) \
+            --admin $CI_ADDR \
+            --creator $CI_ADDR \
             --token CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC \
             --goal 1000 \
-            --deadline $DEADLINE
+            --deadline $DEADLINE \
+            --min_contribution 1
 
-      - name: Assert is_initialized returns true
+      - name: Assert campaign goal is set
         run: |
           RESULT=$(soroban contract invoke \
             --id $CONTRACT_ID \
             --network $NETWORK \
             --source ci-deployer \
-            -- is_initialized)
-          echo "is_initialized: $RESULT"
-          if [ "$RESULT" != "true" ]; then
-            echo "Smoke test FAILED: is_initialized returned $RESULT"
+            -- goal)
+          echo "goal: $RESULT"
+          if [ "$RESULT" != "1000" ]; then
+            echo "Smoke test FAILED: goal returned $RESULT"
             exit 1
           fi
 
-      - name: Query and log campaign state
+      - name: Query and log campaign stats
         run: |
           soroban contract invoke \
             --id $CONTRACT_ID \
             --network $NETWORK \
             --source ci-deployer \
-            -- get_campaign_info
+            -- get_stats
 
       - name: Log deployed contract address for reference
         run: |
