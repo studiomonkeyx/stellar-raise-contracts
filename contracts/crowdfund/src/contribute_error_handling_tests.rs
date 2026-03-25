@@ -229,6 +229,18 @@ fn describe_error_unknown() {
     );
 }
 
+// ── is_retryable helpers ──────────────────────────────────────────────────────
+
+#[test]
+fn is_retryable_amount_too_low_and_zero_amount_are_retryable() {
+    assert!(contribute_error_handling::is_retryable(
+        contribute_error_handling::error_codes::AMOUNT_TOO_LOW
+    ));
+    assert!(contribute_error_handling::is_retryable(
+        contribute_error_handling::error_codes::ZERO_AMOUNT
+    ));
+}
+
 #[test]
 fn describe_error_unknown() {
     assert_eq!(contribute_error_handling::describe_error(99), "Unknown error");

@@ -31,7 +31,9 @@
 //!   rejected before any other validation.
 
 /// Numeric error codes returned by the contract host for `contribute()`.
-/// Mirrors `ContractError` repr values for use in off-chain scripts.
+///
+/// These mirror the `#[repr(u32)]` values of `ContractError` and are intended
+/// for use in off-chain scripts that inspect raw error codes.
 pub mod error_codes {
     /// `contribute()` was called after the campaign deadline.
     pub const CAMPAIGN_ENDED: u32 = 2;
