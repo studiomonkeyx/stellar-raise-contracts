@@ -334,7 +334,7 @@ impl CrowdfundContract {
             return Err(ContractError::CampaignEnded);
         }
 
-        let mut contributors: Vec<Address> = env
+        let contributors: Vec<Address> = env
             .storage()
             .persistent()
             .get(&DataKey::Contributors)
@@ -461,7 +461,7 @@ impl CrowdfundContract {
             return Err(ContractError::CampaignEnded);
         }
 
-        let mut pledgers: Vec<Address> = env
+        let pledgers: Vec<Address> = env
             .storage()
             .persistent()
             .get(&DataKey::Pledgers)

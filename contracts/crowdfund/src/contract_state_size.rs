@@ -284,3 +284,18 @@ impl ContractStateSize {
         total_len <= MAX_TITLE_LENGTH + MAX_DESCRIPTION_LENGTH + MAX_STRING_LEN
     }
 }
+
+/// Legacy constant for backwards compatibility (MAX_STRING_LEN = MAX_DESCRIPTION_LENGTH)
+pub const MAX_STRING_LEN: u32 = MAX_DESCRIPTION_LENGTH;
+
+/// Legacy function for backwards compatibility.
+/// Checks that a string does not exceed MAX_DESCRIPTION_LENGTH bytes.
+///
+/// @param s The string to validate.
+/// @return Ok(()) when within limits, Err otherwise.
+pub fn check_string_len(s: &String) -> Result<(), StateSizeError> {
+    if s.len() > MAX_STRING_LEN {
+        return Err(StateSizeError::StringTooLong);
+    }
+    Ok(())
+}

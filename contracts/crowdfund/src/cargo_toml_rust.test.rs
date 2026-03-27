@@ -7,8 +7,7 @@
 //! - Audit trail maintains complete dependency history
 //! - Dev-only dependencies are properly isolated from production
 
-#![cfg(test)]
-
+#[allow(deprecated)]
 use crate::cargo_toml_rust::{
     all_deprecated_versions_replaced, audited_dependencies, CargoTomlRust, ComplianceRule, DataKey,
     DepRecord, DependencyInfo, SecurityPolicy, PROPTEST_VERSION, PROPTEST_VERSION_DEPRECATED,
