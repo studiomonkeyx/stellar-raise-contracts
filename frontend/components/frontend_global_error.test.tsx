@@ -5,15 +5,36 @@ import {
   ContractError,
   NetworkError,
   TransactionError,
-  ErrorReport,
+  BoundaryRateLimiter,
+  boundaryRateLimiter,
+  sanitizeErrorMessage,
+  isSmartContractError,
+  buildBoundaryLogEntry,
+  buildErrorReport,
+  type ErrorReport,
+  type BoundaryLogEntry,
 } from './frontend_global_error';
 
 const originalConsoleError = console.error;
-beforeAll(() => { console.error = jest.fn(); });
-afterAll(() => { console.error = originalConsoleError; });
-beforeEach(() => { jest.clearAllMocks(); });
+const originalConsoleWarn = console.warn;
+beforeAll(() => {
+  console.error = jest.fn();
+  console.warn = jest.fn();
+});
+afterAll(() => {
+  console.error = originalConsoleError;
+  console.warn = originalConsoleWarn;
+});
+beforeEach(() => {
+  jest.clearAllMocks();
+  boundaryRateLimiter.reset();
+});
 
 const Throw = ({ error }: { error: Error }) => { throw error; };
+
+// ---------------------------------------------------------------------------
+// Custom error classes
+// ---------------------------------------------------------------------------
 
 describe('Custom error classes', () => {
   it('ContractError has correct name and extends Error', () => {
@@ -34,6 +55,163 @@ describe('Custom error classes', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// sanitizeErrorMessage
+// ---------------------------------------------------------------------------
+
+describe('sanitizeErrorMessage', () => {
+  it('returns non-string input as placeholder', () => {
+    expect(sanitizeErrorMessage(null as unknown as string)).toBe('[non-string error]');
+    expect(sanitizeErrorMessage(undefined as unknown as string)).toBe('[non-string error]');
+    expect(sanitizeErrorMessage(42 as unknown as string)).toBe('[non-string error]');
+  });
+  it('passes through a plain message unchanged', () => {
+    expect(sanitizeErrorMessage('contract call failed')).toBe('contract call failed');
+  });
+  it('redacts long hex strings (potential private keys)', () => {
+    const msg = 'key: abcdef1234567890abcdef1234567890 failed';
+    expect(sanitizeErrorMessage(msg)).toContain('[REDACTED]');
+    expect(sanitizeErrorMessage(msg)).not.toContain('abcdef1234567890abcdef1234567890');
+  });
+  it('redacts Stellar account IDs', () => {
+    const stellarId = 'G' + 'A'.repeat(55);
+    expect(sanitizeErrorMessage(`account ${stellarId} not found`)).toContain('[REDACTED]');
+  });
+  it('redacts secret_key patterns', () => {
+    expect(sanitizeErrorMessage('secret_key: mysecretvalue')).toContain('[REDACTED]');
+  });
+  it('redacts private_key patterns', () => {
+    expect(sanitizeErrorMessage('private_key: mysecretvalue')).toContain('[REDACTED]');
+  });
+  it('handles empty string without throwing', () => {
+    expect(sanitizeErrorMessage('')).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isSmartContractError
+// ---------------------------------------------------------------------------
+
+describe('isSmartContractError', () => {
+  it('returns true for ContractError', () => {
+    expect(isSmartContractError(new ContractError('x'))).toBe(true);
+  });
+  it('returns true for NetworkError', () => {
+    expect(isSmartContractError(new NetworkError('x'))).toBe(true);
+  });
+  it('returns true for TransactionError', () => {
+    expect(isSmartContractError(new TransactionError('x'))).toBe(true);
+  });
+  it('returns true for stellar keyword in message', () => {
+    expect(isSmartContractError(new Error('stellar network error'))).toBe(true);
+  });
+  it('returns true for soroban keyword', () => {
+    expect(isSmartContractError(new Error('soroban invocation failed'))).toBe(true);
+  });
+  it('returns true for xdr keyword', () => {
+    expect(isSmartContractError(new Error('xdr decode error'))).toBe(true);
+  });
+  it('returns true for invoke keyword', () => {
+    expect(isSmartContractError(new Error('invoke failed'))).toBe(true);
+  });
+  it('returns false for plain TypeError', () => {
+    expect(isSmartContractError(new TypeError('cannot read property'))).toBe(false);
+  });
+  it('returns false for generic error', () => {
+    expect(isSmartContractError(new Error('something went wrong'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BoundaryRateLimiter
+// ---------------------------------------------------------------------------
+
+describe('BoundaryRateLimiter', () => {
+  it('allows entries up to the limit', () => {
+    const limiter = new BoundaryRateLimiter();
+    for (let i = 0; i < 10; i++) {
+      expect(limiter.isAllowed()).toBe(true);
+    }
+  });
+  it('blocks the 11th entry within the window', () => {
+    const limiter = new BoundaryRateLimiter();
+    for (let i = 0; i < 10; i++) limiter.isAllowed();
+    expect(limiter.isAllowed()).toBe(false);
+  });
+  it('reset() clears the window so entries are allowed again', () => {
+    const limiter = new BoundaryRateLimiter();
+    for (let i = 0; i < 10; i++) limiter.isAllowed();
+    limiter.reset();
+    expect(limiter.isAllowed()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildBoundaryLogEntry
+// ---------------------------------------------------------------------------
+
+describe('buildBoundaryLogEntry', () => {
+  const fakeInfo = { componentStack: '\n  at Foo' } as React.ErrorInfo;
+
+  it('returns a log entry with correct shape', () => {
+    const entry: BoundaryLogEntry = buildBoundaryLogEntry(
+      new Error('test error'),
+      fakeInfo,
+      false,
+      1,
+    );
+    expect(entry.level).toBe('error');
+    expect(entry.errorName).toBe('Error');
+    expect(entry.isSmartContractError).toBe(false);
+    expect(entry.sequence).toBe(1);
+    expect(typeof entry.timestamp).toBe('string');
+  });
+  it('sets isSmartContractError=true for contract errors', () => {
+    const entry = buildBoundaryLogEntry(new ContractError('bad'), fakeInfo, true, 2);
+    expect(entry.isSmartContractError).toBe(true);
+    expect(entry.message).toContain('Smart contract');
+  });
+  it('sanitises the error message in the log entry', () => {
+    const entry = buildBoundaryLogEntry(
+      new Error('secret_key: abc123'),
+      fakeInfo,
+      false,
+      3,
+    );
+    expect(entry.errorMessage).toContain('[REDACTED]');
+    expect(entry.errorMessage).not.toContain('abc123');
+  });
+  it('includes componentStack in dev mode', () => {
+    const entry = buildBoundaryLogEntry(new Error('x'), fakeInfo, false, 4);
+    // NODE_ENV is 'test' (not 'production') so stacks should be present
+    expect(entry.componentStack).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildErrorReport
+// ---------------------------------------------------------------------------
+
+describe('buildErrorReport', () => {
+  const fakeInfo = { componentStack: '\n  at Bar' } as React.ErrorInfo;
+
+  it('returns a report with correct fields', () => {
+    const report: ErrorReport = buildErrorReport(new Error('oops'), fakeInfo, false);
+    expect(report.message).toBe('oops');
+    expect(report.errorName).toBe('Error');
+    expect(report.isSmartContractError).toBe(false);
+    expect(typeof report.timestamp).toBe('string');
+  });
+  it('sets isSmartContractError=true for ContractError', () => {
+    const report = buildErrorReport(new ContractError('bad'), fakeInfo, true);
+    expect(report.isSmartContractError).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Normal rendering (no error)
+// ---------------------------------------------------------------------------
+
 describe('Normal rendering (no error)', () => {
   it('renders children when no error is thrown', () => {
     render(
@@ -49,6 +227,10 @@ describe('Normal rendering (no error)', () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Generic error fallback
+// ---------------------------------------------------------------------------
 
 describe('Generic error fallback', () => {
   it('renders the default fallback UI on error', () => {
@@ -98,6 +280,10 @@ describe('Generic error fallback', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Smart contract error fallback
+// ---------------------------------------------------------------------------
+
 describe('Smart contract error fallback', () => {
   const contractErrors: Array<[string, Error]> = [
     ['ContractError instance', new ContractError('contract call failed')],
@@ -142,6 +328,10 @@ describe('Smart contract error fallback', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Custom fallback prop
+// ---------------------------------------------------------------------------
+
 describe('Custom fallback prop', () => {
   it('renders the custom fallback when provided', () => {
     render(
@@ -171,6 +361,10 @@ describe('Custom fallback prop', () => {
     expect(screen.queryByText('Smart Contract Error')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Recovery via Try Again
+// ---------------------------------------------------------------------------
 
 describe('Recovery via Try Again', () => {
   it('re-renders children after clicking Try Again when error is resolved', () => {
@@ -217,6 +411,10 @@ describe('Recovery via Try Again', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// onError callback
+// ---------------------------------------------------------------------------
+
 describe('onError callback', () => {
   it('calls onError with a structured report when an error is caught', () => {
     const onError = jest.fn();
@@ -261,6 +459,123 @@ describe('onError callback', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// onLog callback (new logging infrastructure)
+// ---------------------------------------------------------------------------
+
+describe('onLog callback', () => {
+  it('calls onLog with a BoundaryLogEntry when an error is caught', () => {
+    const onLog = jest.fn();
+    render(
+      <FrontendGlobalErrorBoundary onLog={onLog}>
+        <Throw error={new Error('log test')} />
+      </FrontendGlobalErrorBoundary>,
+    );
+    expect(onLog).toHaveBeenCalledTimes(1);
+    const entry: BoundaryLogEntry = onLog.mock.calls[0][0];
+    expect(entry.level).toBe('error');
+    expect(entry.errorName).toBe('Error');
+    expect(entry.sequence).toBe(1);
+    expect(typeof entry.timestamp).toBe('string');
+    expect(typeof entry.isSmartContractError).toBe('boolean');
+  });
+  it('log entry has isSmartContractError=true for ContractError', () => {
+    const onLog = jest.fn();
+    render(
+      <FrontendGlobalErrorBoundary onLog={onLog}>
+        <Throw error={new ContractError('bad')} />
+      </FrontendGlobalErrorBoundary>,
+    );
+    expect(onLog.mock.calls[0][0].isSmartContractError).toBe(true);
+  });
+  it('log entry errorMessage is sanitised', () => {
+    const onLog = jest.fn();
+    render(
+      <FrontendGlobalErrorBoundary onLog={onLog}>
+        <Throw error={new Error('secret_key: mysecret')} />
+      </FrontendGlobalErrorBoundary>,
+    );
+    const entry: BoundaryLogEntry = onLog.mock.calls[0][0];
+    expect(entry.errorMessage).toContain('[REDACTED]');
+    expect(entry.errorMessage).not.toContain('mysecret');
+  });
+  it('sequence increments on each error', () => {
+    const onLog = jest.fn();
+    // First boundary instance — sequence 1
+    render(
+      <FrontendGlobalErrorBoundary onLog={onLog}>
+        <Throw error={new Error('first')} />
+      </FrontendGlobalErrorBoundary>,
+    );
+    expect(onLog.mock.calls[0][0].sequence).toBe(1);
+  });
+  it('does not throw if onLog is not provided', () => {
+    expect(() =>
+      render(
+        <FrontendGlobalErrorBoundary>
+          <Throw error={new Error('no log callback')} />
+        </FrontendGlobalErrorBoundary>,
+      ),
+    ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+describe('Rate limiting', () => {
+  it('emits console.warn when rate limit is exceeded', () => {
+    // Exhaust the shared rate limiter
+    for (let i = 0; i < 10; i++) boundaryRateLimiter.isAllowed();
+
+    render(
+      <FrontendGlobalErrorBoundary>
+        <Throw error={new Error('rate limited')} />
+      </FrontendGlobalErrorBoundary>,
+    );
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('rate limit exceeded'),
+      expect.objectContaining({ sequence: expect.any(Number) }),
+    );
+  });
+  it('does NOT call onLog when rate limit is exceeded', () => {
+    for (let i = 0; i < 10; i++) boundaryRateLimiter.isAllowed();
+    const onLog = jest.fn();
+    render(
+      <FrontendGlobalErrorBoundary onLog={onLog}>
+        <Throw error={new Error('rate limited')} />
+      </FrontendGlobalErrorBoundary>,
+    );
+    expect(onLog).not.toHaveBeenCalled();
+  });
+  it('does NOT call onError when rate limit is exceeded', () => {
+    for (let i = 0; i < 10; i++) boundaryRateLimiter.isAllowed();
+    const onError = jest.fn();
+    render(
+      <FrontendGlobalErrorBoundary onError={onError}>
+        <Throw error={new Error('rate limited')} />
+      </FrontendGlobalErrorBoundary>,
+    );
+    expect(onError).not.toHaveBeenCalled();
+  });
+  it('allows logging again after reset', () => {
+    for (let i = 0; i < 10; i++) boundaryRateLimiter.isAllowed();
+    boundaryRateLimiter.reset();
+    const onLog = jest.fn();
+    render(
+      <FrontendGlobalErrorBoundary onLog={onLog}>
+        <Throw error={new Error('after reset')} />
+      </FrontendGlobalErrorBoundary>,
+    );
+    expect(onLog).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Accessibility
+// ---------------------------------------------------------------------------
+
 describe('Accessibility', () => {
   it('fallback container has role alert', () => {
     render(
@@ -295,6 +610,10 @@ describe('Accessibility', () => {
     expect(container.querySelector('[aria-hidden="true"]')).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Error classification edge cases
+// ---------------------------------------------------------------------------
 
 describe('Error classification edge cases', () => {
   it('classifies NetworkError as smart contract error', () => {
