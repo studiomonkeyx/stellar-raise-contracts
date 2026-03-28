@@ -19,12 +19,8 @@ pub mod npm_package_lock;
 pub mod proptest_generator_boundary;
 pub mod refund_single_token;
 pub mod soroban_sdk_minor;
-pub mod stellar_token_minter;
-pub mod stream_processing_optimization;
-pub mod withdraw_event_emission;
-pub mod security_compliance_automation;
 
-// ── Imports from modules ──────────────────────────────────────────────────────
+pub mod parallel
 
 use crowdfund_initialize_function::{execute_initialize, InitParams};
 use refund_single_token::{
