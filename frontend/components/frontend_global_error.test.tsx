@@ -10,9 +10,19 @@ import {
 } from './frontend_global_error';
 
 const originalConsoleError = console.error;
-beforeAll(() => { console.error = jest.fn(); });
-afterAll(() => { console.error = originalConsoleError; });
-beforeEach(() => { jest.clearAllMocks(); });
+const originalConsoleWarn = console.warn;
+beforeAll(() => {
+  console.error = jest.fn();
+  console.warn = jest.fn();
+});
+afterAll(() => {
+  console.error = originalConsoleError;
+  console.warn = originalConsoleWarn;
+});
+beforeEach(() => {
+  jest.clearAllMocks();
+  boundaryRateLimiter.reset();
+});
 
 const Throw = ({ error }: { error: Error }) => { throw error; };
 
